@@ -1,0 +1,131 @@
+clc
+clear all
+
+c0 = physconst('LightSpeed');
+fc = 24e9;              % carrier frequency
+lambda = c0/ fc;        % wavelength
+N = 64;                 % number of subcarriers
+%cplen = N/4;
+M = 16;                 % number of symbols
+delta_f = 15e3 * 2^6;   % subcarrier spacing
+T = 1 / delta_f;        % symbol duration
+Tcp = T / 4;            % cyclic prefix duration
+Ts = T + Tcp;           % total symbol duration
+D = 0.1;                % he fraction of the sub-carrier distance the Doppler shift can maximally be
+G = 0.25;               % cyclic prefix
+
+qam = 4; % 4-QAM modulation
+
+% Target parameters
+target_pos = [100]; % target distance (m)
+target_delay = range2time(target_pos, c0);
+target_speed = [50]; % target velocity (m/s)
+target_dop = speed2dop(2 * target_speed, lambda);
+
+SNR_dB = -10;
+SNR = 10.^(SNR_dB/10);
+
+% Transmit data
+data = randi([0 qam - 1], N, M);
+TxData = qammod(data, qam, 'UnitAveragePower', true);
+%s_t = ofdmmod(TxData,N,cplen);
+
+%TxData = reshape(s_t, [, 16]);
+
+% Received frequency-domain signal over the radar channel
+RxData = zeros(size(TxData));
+for kSubcarrier = 1:N
+    for mSymbol = 1:M
+        RxData(kSubcarrier, mSymbol) = sum(sqrt(SNR) * TxData(kSubcarrier, mSymbol)... 
+            .* exp(-1j * 2 * pi * fc * target_delay)...
+            .* exp(1j * 2 * pi * mSymbol *Ts .* target_dop)...
+            .* exp(-1j * 2 * pi * kSubcarrier .* target_delay * delta_f) )...
+            + sqrt(1/2)* (randn() +1j * randn());
+    end
+end
+%y_t = ofdmdemod(RxData,N,cplen);
+
+
+% Remove the information of transmit data
+dividerArray = RxData ./ TxData;    % Eq 4 F_{k, l} = F_{RX}/ F_{TX}
+sigma_kl =  sqrt(1/2)* (randn() +1j * randn()) ./ (abs(dividerArray).^2);
+
+%% Periodogram/FFT-based estimation
+NPer = 16 * N;
+normalizedPower = abs(ifft(dividerArray, NPer, 1));
+normalizedPower_dB = 10 * log10(normalizedPower);
+mean_normalizedPower = mean(normalizedPower, 2);
+mean_normalizedPower = mean_normalizedPower / max(mean_normalizedPower);
+mean_normalizedPower_dB = 10 * log10(mean_normalizedPower);
+[~, E_rangeEstimation] = max(mean_normalizedPower_dB);
+rangeIndex = 0:1:(NPer-1);
+rangeIndex = rangeIndex * c0 / (2 * delta_f * NPer);
+Est_distance = E_rangeEstimation * c0 / (2 * delta_f * NPer);
+hold on;
+plot(rangeIndex, mean_normalizedPower_dB);
+grid on;
+xlabel('Range [m]');
+ylabel('Normalized Range Profile [dB]');
+hold off
+
+MPer = 256 * M;
+%normPow = abs(fft(dividerArray, MPer, 2));
+%normPow_dB = 10 * log10(normPow);
+%mean_normPow = mean(normPow, 1);
+%mean_normPow = mean_normPow / max(mean_normPow);
+%mean_normPow_dB = 10 * log10(mean_normPow);
+%[~, E_velocityEstimation] = max(mean_normPow_dB);
+%velocityIndex = 0:1:(MPer-1);
+%velocityIndex = -MPer/2:1:(MPer-1)/2;
+%velocityIndex = velocityIndex * c0 / (2 * fc * MPer * Ts);
+%Est_velocity = E_velocityEstimation * c0 / (2 * fc * MPer * Ts);
+%figure
+%plot(velocityIndex, mean_normPow_dB);
+%grid on;
+%xlabel('Speed [m/s]');
+%ylabel('Normalized Velocity Profile [dB]');
+%legend('MUSIC', 'periodogram')
+
+C_mn = abs(ifft(fft(dividerArray, MPer, 2), NPer, 1));  % Eq. 20
+
+% Cropped before further processing
+m_max = D*MPer;
+n_max = G*NPer;
+
+C_m = (1/M*N) * abs(sum(ifft(fft(dividerArray, MPer, 2), NPer, 1), 1));
+
+%% For visualize
+A_shift = fftshift(C_mn,2);                             
+rangeIndex = 0:1:(NPer-1);
+rangeIndex = rangeIndex * c0 / (2 * delta_f * NPer);
+reso_range = c0 / (2 * delta_f * NPer);
+velocityIndex = 0:1:(MPer-1); %-MPer/2:1:(MPer-1)/2;
+velocityIndex = velocityIndex * c0 / (2 * fc * MPer * Ts);
+reso_speed = c0 / (2 * fc * MPer * Ts);
+% plot
+%figure
+%velocityIndex = -MPer/2:1:(MPer-1)/2;
+%velocityIndex = velocityIndex * c0 / (2 * fc * MPer * Ts);
+%plot_mesh(A_shift, NPer, MPer, rangeIndex, velocityIndex)
+%hold on
+%plot3(Est_velocity_multgt,Est_distance_multgt,m_peak, 'o','color', 'r')
+
+%% Estimate values for more than 1 targets
+[pks,locs] = findpeaks(max(C_mn,[],2));
+%[pk2,loc]  = maxk(pks,2);                                % two peaks
+loc = find(pks > 0.2);
+%find peaks for range
+n_hat = locs(loc);
+
+%find peaks for speed
+[m_peak,m_hat] = max(C_mn(n_hat,:), [],2);
+
+Est_distance_multgt = n_hat * c0 / (2 * delta_f * NPer);
+Est_velocity_multgt = m_hat * c0 / (2 * fc * MPer * Ts);
+
+%bias_r = (c/(2*NPer*delta_f)) * ()                      % Eq. 28                
+%D_r = 
+%bias_v = (c/(2*MPer*delta_f)) * ()                      % Eq. 30
+%D_v = 
+
+
